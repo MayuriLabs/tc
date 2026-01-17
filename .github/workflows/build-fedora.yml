@@ -6,7 +6,7 @@ on:
       llvm_ref:
         description: 'LLVM branch, tag, or Full SHA'
         required: true
-        default: 'release/21.x'
+        default: 'llvm-r547379-release'
       vendor_string:
         description: 'Vendor string for the build'
         required: true
@@ -16,11 +16,14 @@ on:
       llvm_ref:
         type: string
         required: true
-        default: 'release/21.x'
+        default: 'llvm-r547379-release'
       vendor_string:
         type: string
         required: true
         default: 'Mayuri'
+      caller_run_id:
+        type: string
+        required: false
 
 permissions:
   contents: write
@@ -42,16 +45,19 @@ jobs:
       run: bash ci.sh deps
     - name: Authenticate GitHub CLI
       run: echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
-    - name: Clone LLVM
-      uses: actions/checkout@v4
-      with:
-        repository: llvm/llvm-project
-        ref: ${{ inputs.llvm_ref }}
-        path: llvm-project
+    - name: Clone Android LLVM
+      run: |
+        git clone \
+          --branch ${{ inputs.llvm_ref }} \
+          --depth=1 \
+          --single-branch \
+          https://android.googlesource.com/toolchain/llvm-project \
+          llvm-project
     - name: Build LLVM
       run: bash ci.sh llvm
       env:
         LLVM_VENDOR_STRING: ${{ inputs.vendor_string }}
+        RUN_ID: ${{ inputs.caller_run_id || github.run_id }}
     - name: Build binutils
       run: bash ci.sh binutils
     - name: Compress artifacts
@@ -62,3 +68,4 @@ jobs:
       run: bash ci.sh release
       env:
         LLVM_VENDOR_STRING: ${{ inputs.vendor_string }}
+        RUN_ID: ${{ inputs.caller_run_id || github.run_id }}

@@ -4,6 +4,18 @@ base=$(dirname "$(readlink -f "$0")")
 install=$base/install
 src=$base/src
 export PATH="$base/.clang/bin:$PATH"
+# Helper to detect TensorFlow installation path
+function detect_tensorflow() {
+    if python3.11 -c "import tensorflow" >/dev/null 2>&1; then
+        TENSORFLOW_INSTALL=$(python3.11 -c "import tensorflow; print(tensorflow.__path__[0])")
+        export TENSORFLOW_INSTALL
+    else
+        # Fallback to standard path if not installed yet (for do_deps to fill)
+        TENSORFLOW_INSTALL=/usr/local/lib/python3.11/dist-packages/tensorflow
+        export TENSORFLOW_INSTALL
+    fi
+}
+detect_tensorflow
 
 # OS Detection
 if [[ $(command -v dnf) ]]; then
@@ -38,7 +50,7 @@ function do_all() {
 function do_binutils() {
     local targets=("aarch64" "arm" "x86_64")
 
-    "$base"/build-binutils.py \
+    python3.11 "$base"/build-binutils.py \
         --install-folder "$install" \
         --show-build-commands \
         --targets "${targets[@]}"
@@ -72,8 +84,11 @@ function do_deps() {
             ncurses-compat-libs \
             ninja-build \
             openssl-devel \
+            patch \
             patchelf \
             perl-Digest-SHA \
+            python3.11 \
+            python3-pip \
             python3-pyelftools \
             python3-setuptools \
             uboot-tools \
@@ -83,6 +98,13 @@ function do_deps() {
     else
         # Refresh mirrorlist to avoid dead mirrors
         apt update -y
+
+        # Ensure python3.11 is available via deadsnakes PPA if needed
+        if ! apt-cache show python3.11 >/dev/null 2>&1; then
+            apt install -y --no-install-recommends software-properties-common
+            add-apt-repository -y ppa:deadsnakes/ppa
+            apt update -y
+        fi
 
         apt install -y --no-install-recommends \
             bc \
@@ -107,13 +129,30 @@ function do_deps() {
             lld \
             make \
             ninja-build \
+            patch \
             patchelf \
-            python3 \
+            python3.11 \
+            python3.11-dev \
+            python3.11-distutils \
+            python3.11-venv \
+            python3-pip \
             texinfo \
             wget \
             xz-utils \
             zlib1g-dev
     fi
+
+    # Ensure pip is available for python3.11
+    if ! python3.11 -m pip --version >/dev/null 2>&1; then
+        python3.11 -m ensurepip --upgrade || {
+            curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
+        }
+    fi
+
+    python3.11 -m pip install --break-system-packages -r "$base"/requirements.txt
+
+    # Refresh TensorFlow path after installation
+    detect_tensorflow
 }
 
 function do_kernel() {
@@ -132,7 +171,7 @@ function do_kernel() {
             "$linux"
     fi
 
-    cat <<EOF | env PYTHONPATH="$base"/tc_build python3 -
+    cat <<EOF | env PYTHONPATH="$base"/tc_build python3.11 -
 from pathlib import Path
 
 from kernel import LLVMKernelBuilder
@@ -155,9 +194,25 @@ function do_llvm() {
 
     local targets=("AArch64" "ARM" "X86")
 
-    "$base"/build-llvm.py \
+    if [[ $ARCH == "aarch64" ]]; then
+        extra_args+=(--mlgo inliner_train="$base"/mlgo-models/arm64/inlining-Oz-chromium regalloc_train="$base"/mlgo-models/arm64/regalloc-evict-aosp)
+    else
+        extra_args+=(--mlgo inliner_train="$base"/mlgo-models/x86_64/inlining-Oz-99f0063-v1.1 regalloc_train="$base"/mlgo-models/x86_64/regalloc-evict-v1.1)
+    fi
+
+    if [[ -d ${TENSORFLOW_INSTALL:-} ]]; then
+        extra_args+=(--defines "TENSORFLOW_C_LIB_PATH=$TENSORFLOW_INSTALL")
+    fi
+
+    cd "$base"/profiles
+    for archive in *.tar.xz; do
+        tar -xJf "$archive"
+    done
+    cd "$base"
+
+    python3.11 "$base"/build-llvm.py \
         --install-folder "$install" \
-        --vendor-string "$LLVM_VENDOR_STRING" \
+        --vendor-string "$LLVM_VENDOR_STRING ($RUN_ID, +pgo, +bolt, +lto, +mlgo, based on r547379)" \
         --targets "${targets[@]}" \
         --defines "LLVM_PARALLEL_COMPILE_JOBS=$TomTal LLVM_PARALLEL_LINK_JOBS=$TomTal CMAKE_C_FLAGS='-g0 -O3' CMAKE_CXX_FLAGS='-g0 -O3' LLVM_USE_LINKER=lld LLVM_ENABLE_LLD=ON" \
         --projects clang compiler-rt lld polly openmp \
@@ -165,6 +220,9 @@ function do_llvm() {
         --quiet-cmake \
         --llvm-folder "$base"/llvm-project \
         --lto thin \
+        --pgo "$base"/profiles/r547379.profdata \
+        --bolt \
+        --bolt-profile "$base"/profiles/clang.fdata \
         "${extra_args[@]}"
 }
 
@@ -173,6 +231,11 @@ function do_compress() {
     # Remove unnecessary files
     rm -fr "$install"/include
     rm -f "$install"/lib/*.a "$install"/lib/*.la
+
+    # Copy libtensorflow if it exists
+    if [[ -d ${TENSORFLOW_INSTALL:-} ]]; then
+        find "$TENSORFLOW_INSTALL" -maxdepth 2 -name "libtensorflow.so*" -exec cp -P {} "$install"/lib/ \;
+    fi
 
     # Strip remaining binaries
     # Avoid strip failing on non-ELFs
@@ -209,7 +272,7 @@ function do_compress() {
     mkdir -p "$base"/dist
     cd "$install"
     tar -cJf "$base"/dist/"$file_name" -- *
-    curl -X POST -F "file=@$base/dist/$file_name" https://temp.wulan17.dev/api/v1/upload
+    #curl -X POST -F "file=@$base/dist/$file_name" https://temp.wulan17.dev/api/v1/upload
 }
 
 function do_release() {
@@ -225,11 +288,11 @@ function do_release() {
     clang_version=$("$base"/install/bin/clang --version | head -n 1 | awk '{print $4}')
     git_hash=$(git -C "$base"/llvm-project rev-parse --short HEAD)
 
-    TAG="$clang_version-$git_hash"
+    TAG="$clang_version-$RUN_ID"
     ASSET="$file_name"
     REPO="$GITHUB_REPOSITORY"
-    TITLE="$LLVM_VENDOR_STRING Clang $clang_version ($git_hash)"
-    NOTES="$LLVM_VENDOR_STRING Clang $clang_version ($git_hash)"
+    TITLE="$LLVM_VENDOR_STRING ($RUN_ID, +pgo, +bolt, +lto, +mlgo, based on r547379) Clang $clang_version"
+    NOTES="$LLVM_VENDOR_STRING ($RUN_ID, +pgo, +bolt, +lto, +mlgo, based on r547379) Clang $clang_version"
 
     # Check if release exists
     if gh release view "$TAG" --repo "$REPO" &>/dev/null; then

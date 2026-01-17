@@ -6,7 +6,7 @@ on:
       llvm_ref:
         description: 'LLVM branch, tag, or Full SHA'
         required: true
-        default: 'release/21.x'
+        default: 'llvm-r547379-release'
       vendor_string:
         description: 'Vendor string for the build'
         required: true
@@ -21,6 +21,7 @@ jobs:
     with:
       llvm_ref: ${{ inputs.llvm_ref }}
       vendor_string: ${{ inputs.vendor_string }}
+      caller_run_id: ${{ github.run_id }}
     secrets: inherit
 
   bookworm:
@@ -29,12 +30,5 @@ jobs:
       llvm_ref: ${{ inputs.llvm_ref }}
       vendor_string: ${{ inputs.vendor_string }}
       debian_codename: bookworm
-    secrets: inherit
-
-  trixie:
-    uses: ./.github/workflows/build-debian.yml
-    with:
-      llvm_ref: ${{ inputs.llvm_ref }}
-      vendor_string: ${{ inputs.vendor_string }}
-      debian_codename: trixie
+      caller_run_id: ${{ github.run_id }}
     secrets: inherit
