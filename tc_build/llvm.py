@@ -37,6 +37,7 @@ class LLVMBuilder(Builder):
 
         self.bolt = False
         self.bolt_builder = None
+        self.bolt_profile = None
         self.build_targets = ['all']
         self.ccache = False
         self.check_targets = []
@@ -73,67 +74,70 @@ class LLVMBuilder(Builder):
 
         bolt_profile = Path(self.folders.build, 'clang.fdata')
 
-        if mode == 'instrumentation':
-            # clang.inst: instrumented binary, will be removed after generating profiles
-            clang_inst = clang.with_name('clang.inst')
+        if self.bolt_profile:
+            bolt_profile = self.bolt_profile
+        else:
+            if mode == 'instrumentation':
+                # clang.inst: instrumented binary, will be removed after generating profiles
+                clang_inst = clang.with_name('clang.inst')
 
-            clang_inst_cmd = [
-                self.tools.llvm_bolt,
-                '--instrument',
-                f"--instrumentation-file={bolt_profile}",
-                '--instrumentation-file-append-pid',
-                '-o',
-                clang_inst,
-                clang,
-            ]
-            # When running an instrumented binary on certain platforms (namely
-            # Apple Silicon), there may be hangs due to instrumentation in
-            # between exclusive load and store instructions:
-            # https://github.com/llvm/llvm-project/issues/153492
-            # Enable conservative instrumentation to avoid this.
-            if tc_build.utils.cpu_is_apple_silicon():
-                clang_inst_cmd.append('--conservative-instrumentation')
-            self.run_cmd(clang_inst_cmd)
+                clang_inst_cmd = [
+                    self.tools.llvm_bolt,
+                    '--instrument',
+                    f"--instrumentation-file={bolt_profile}",
+                    '--instrumentation-file-append-pid',
+                    '-o',
+                    clang_inst,
+                    clang,
+                ]
+                # When running an instrumented binary on certain platforms (namely
+                # Apple Silicon), there may be hangs due to instrumentation in
+                # between exclusive load and store instructions:
+                # https://github.com/llvm/llvm-project/issues/153492
+                # Enable conservative instrumentation to avoid this.
+                if tc_build.utils.cpu_is_apple_silicon():
+                    clang_inst_cmd.append('--conservative-instrumentation')
+                self.run_cmd(clang_inst_cmd)
 
-            self.bolt_builder.bolt_instrumentation = True
+                self.bolt_builder.bolt_instrumentation = True
 
-        if mode == 'sampling':
-            self.bolt_builder.bolt_sampling_output = Path(self.folders.build, 'perf.data')
+            if mode == 'sampling':
+                self.bolt_builder.bolt_sampling_output = Path(self.folders.build, 'perf.data')
 
-        self.bolt_builder.toolchain_prefix = self.folders.build
-        self.bolt_builder.build()
+            self.bolt_builder.toolchain_prefix = self.folders.build
+            self.bolt_builder.build()
 
-        # With instrumentation, we need to combine the profiles we generated,
-        # as they are separated by PID
-        if mode == 'instrumentation':
-            fdata_files = bolt_profile.parent.glob(f"{bolt_profile.name}.*.fdata")
+            # With instrumentation, we need to combine the profiles we generated,
+            # as they are separated by PID
+            if mode == 'instrumentation':
+                fdata_files = bolt_profile.parent.glob(f"{bolt_profile.name}.*.fdata")
 
-            # merge-fdata will print one line for each .fdata it merges.
-            # Redirect the output to a log file in case it ever needs to be
-            # inspected.
-            merge_fdata_log = Path(self.folders.build, 'merge-fdata.log')
+                # merge-fdata will print one line for each .fdata it merges.
+                # Redirect the output to a log file in case it ever needs to be
+                # inspected.
+                merge_fdata_log = Path(self.folders.build, 'merge-fdata.log')
 
-            with bolt_profile.open('w', encoding='utf-8') as out_file, \
-                 merge_fdata_log.open('w', encoding='utf-8') as err_file:
-                tc_build.utils.print_info('Merging .fdata files, this might take a while...')
-                subprocess.run([self.tools.merge_fdata, *list(fdata_files)],
-                               check=True,
-                               stderr=err_file,
-                               stdout=out_file)
-            for fdata_file in fdata_files:
-                fdata_file.unlink()
+                with bolt_profile.open('w', encoding='utf-8') as out_file, \
+                     merge_fdata_log.open('w', encoding='utf-8') as err_file:
+                    tc_build.utils.print_info('Merging .fdata files, this might take a while...')
+                    subprocess.run([self.tools.merge_fdata, *list(fdata_files)],
+                                   check=True,
+                                   stderr=err_file,
+                                   stdout=out_file)
+                for fdata_file in fdata_files:
+                    fdata_file.unlink()
 
-        if mode == 'sampling':
-            perf2bolt_cmd = [
-                self.tools.perf2bolt,
-                '-p',
-                self.bolt_builder.bolt_sampling_output,
-                '-o',
-                bolt_profile,
-                clang,
-            ]
-            self.run_cmd(perf2bolt_cmd)
-            self.bolt_builder.bolt_sampling_output.unlink()
+            if mode == 'sampling':
+                perf2bolt_cmd = [
+                    self.tools.perf2bolt,
+                    '-p',
+                    self.bolt_builder.bolt_sampling_output,
+                    '-o',
+                    bolt_profile,
+                    clang,
+                ]
+                self.run_cmd(perf2bolt_cmd)
+                self.bolt_builder.bolt_sampling_output.unlink()
 
         # Now actually optimize clang
         bolt_readme = Path(self.folders.source, 'bolt/README.md').read_text(encoding='utf-8')
@@ -167,7 +171,7 @@ class LLVMBuilder(Builder):
         ]
         self.run_cmd(clang_opt_cmd)
         clang_bolt.replace(clang)
-        if mode == 'instrumentation':
+        if mode == 'instrumentation' and not self.bolt_profile:
             clang_inst.unlink()
 
     def build(self):

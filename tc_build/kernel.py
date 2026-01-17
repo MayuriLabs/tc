@@ -375,6 +375,8 @@ class LLVMKernelBuilder(Builder):
         self.toolchain_prefix = None
 
     def build(self):
+        if not self.folders.source:
+            raise RuntimeError('build() called without source folder?')
         lsm = LinuxSourceManager()
         lsm.location = self.folders.source
 

@@ -61,53 +61,79 @@ parser.add_argument('--build-targets',
                     nargs='+')
 parser.add_argument('--bolt',
                     help=textwrap.dedent('''\
-                    Optimize the final clang binary with BOLT (Binary Optimization and Layout Tool), which can
-                    often improve compile time performance by 5-7%% on average.
+          Optimize the final clang binary with BOLT (Binary Optimization and Layout Tool), which can
+          often improve compile time performance by 5-7%% on average.
 
-                    This is similar to Profile Guided Optimization (PGO) but it happens against the final
-                    binary that is built. The script will:
+          This is similar to Profile Guided Optimization (PGO) but it happens against the final
+          binary that is built. The script will:
 
-                    1. Figure out if perf can be used with branch sampling. You can test this ahead of time by
-                       running:
+          1. Figure out if perf can be used with branch sampling. You can test this ahead of time by
+              running:
 
-                       $ perf record --branch-filter any,u --event cycles:u --output /dev/null -- sleep 1
+              $ perf record --branch-filter any,u --event cycles:u --output /dev/null -- sleep 1
 
-                    2. If perf cannot be used, the clang binary will be instrumented by llvm-bolt, which will
-                       result in a much slower clang binary.
+          2. If perf cannot be used, the clang binary will be instrumented by llvm-bolt, which will
+              result in a much slower clang binary.
 
-                       NOTE #1: When this instrumentation is combined with a build of LLVM that has already
-                                been PGO'd (i.e., the '--pgo' flag) without LLVM's internal assertions (i.e.,
-                                no '--assertions' flag), there might be a crash when attempting to run the
-                                instrumented clang:
-                                https://github.com/llvm/llvm-project/issues/55004
-                                To avoid this, pass '--assertions' with '--bolt --pgo'.
+              NOTE #1: When this instrumentation is combined with a build of LLVM that has already
+                          been PGO'd (i.e., the '--pgo' flag) without LLVM's internal assertions (i.e.,
+                          no '--assertions' flag), there might be a crash when attempting to run the
+                          instrumented clang:
+                          https://github.com/llvm/llvm-project/issues/55004
+                          To avoid this, pass '--assertions' with '--bolt --pgo'.
 
-                       NOTE #2: BOLT's instrumentation might not be compatible with architectures other than
-                                x86_64 and build-llvm.py's implementation has only been validated on x86_64
-                                machines:
-                                https://github.com/llvm/llvm-project/issues/55005
-                                BOLT itself only appears to support AArch64 and x86_64 as of LLVM commit
-                                a0b8ab1ba3165d468792cf0032fce274c7d624e1.
+              NOTE #2: BOLT's instrumentation might not be compatible with architectures other than
+                          x86_64 and build-llvm.py's implementation has only been validated on x86_64
+                          machines:
+                          https://github.com/llvm/llvm-project/issues/55005
+                          BOLT itself only appears to support AArch64 and x86_64 as of LLVM commit
+                          a0b8ab1ba3165d468792cf0032fce274c7d624e1.
 
-                    3. A kernel will be built and profiled. This will either be the host architecture's
-                       defconfig or the first target's defconfig if '--targets' is specified without support
-                       for the host architecture. The profiling data will be quite large, so it is imperative
-                       that you have ample disk space and memory when attempting to do this. With instrumentation,
-                       a profile will be generated for each invocation (PID) of clang, so this data could easily
-                       be a couple hundred gigabytes large.
+          3. A kernel will be built and profiled. This will either be the host architecture's
+              defconfig or the first target's defconfig if '--targets' is specified without support
+              for the host architecture. The profiling data will be quite large, so it is imperative
+              that you have ample disk space and memory when attempting to do this. With instrumentation,
+              a profile will be generated for each invocation (PID) of clang, so this data could easily
+              be a couple hundred gigabytes large.
 
-                    4. The clang binary will be optimized with BOLT using the profile generated above. This can
-                       take some time.
+          4. The clang binary will be optimized with BOLT using the profile generated above. This can
+              take some time.
 
-                       NOTE #3: Versions of BOLT without commit 7d7771f34d14 ("[BOLT] Compact legacy profiles")
-                                will use significantly more memory during this stage if instrumentation is used
-                                because the merged profile is not as slim as it could be. Either upgrade to a
-                                version of LLVM that contains that change or pick it yourself, switch to perf if
-                                your machine supports it, upgrade the amount of memory you have (if possible),
-                                or run build-llvm.py without '--bolt'.
+              NOTE #3: Versions of BOLT without commit 7d7771f34d14 ("[BOLT] Compact legacy profiles")
+                          will use significantly more memory during this stage if instrumentation is used
+                          because the merged profile is not as slim as it could be. Either upgrade to a
+                          version of LLVM that contains that change or pick it yourself, switch to perf if
+                          your machine supports it, upgrade the amount of memory you have (if possible),
+                          or run build-llvm.py without '--bolt'.
 
-                    '''),
+          Alternatively, you can pass a BOLT profile file using --bolt-profile /path/to/profile.fdata
+     '''),
                     action='store_true')
+
+parser.add_argument(
+    '--bolt-profile',
+    metavar='BOLT_PROFILE',
+    help=
+    'Path to a BOLT profile file (.fdata, .yaml, etc.) to use for BOLT optimization (optional).',
+    type=str,
+    default=None)
+# MLGO support
+parser.add_argument('--mlgo',
+                    metavar='MLGO_MODELS',
+                    help=textwrap.dedent('''\
+                          Enable MLGO (Machine Learning Guided Optimization) for LLVM. This allows you to specify
+                          one or more MLGO models to use for training or inference. MLGO can improve codegen by
+                          using machine learning models for inlining and register allocation.
+
+                          Example usage:
+                             --mlgo inliner=path/to/inliner_model.pb regalloc=path/to/regalloc_model.pb
+
+                          To train a model, pass the path to a directory where training data should be written.
+                          To use a pre-trained model, pass the path to the .pb file.
+
+                          See: https://llvm.org/docs/mlgo/ for more information.
+                          '''),
+                    nargs='+')
 opt_options.add_argument('--build-stage1-only',
                          help=textwrap.dedent('''\
                     By default, the script does a multi-stage build: it builds a more lightweight version of
@@ -272,61 +298,25 @@ parser.add_argument('-p',
                     '''),
                     nargs='+')
 opt_options.add_argument('--pgo',
-                         metavar='PGO_BENCHMARK',
+                         metavar='PGO_BENCHMARK_OR_FILE',
                          help=textwrap.dedent('''\
-                    Build the final compiler with Profile Guided Optimization, which can often improve compile
-                    time performance by 15-20%% on average. The script will:
+        Build the final compiler with Profile Guided Optimization, which can often improve compile
+        time performance by 15-20%% on average. The script will:
 
-                    1. Build a small bootstrap compiler like usual (stage 1).
+        1. Build a small bootstrap compiler like usual (stage 1).
+        2. Build an instrumented compiler with that compiler (stage 2).
+        3. Run the specified benchmark(s) (see below), or use a prebuilt .profdata file by passing its path.
 
-                    2. Build an instrumented compiler with that compiler (stage 2).
+        Supported benchmarks:
+          kernel-defconfig, kernel-allmodconfig, kernel-allyesconfig
+          kernel-defconfig-slim, kernel-allmodconfig-slim, kernel-allyesconfig-slim
+          llvm
 
-                    3. Run the specified benchmark(s).
+        Alternatively, pass a path to a .profdata file to use a prebuilt profile directly.
 
-                       kernel-defconfig, kernel-allmodconfig, kernel-allyesconfig:
-
-                       Download and extract kernel source from kernel.org (unless '--linux-folder' is
-                       specified) and build some kernels based on the requested config with the instrumented
-                       compiler (based on the '--targets' option). If there is a build error with one of the
-                       kernels, build-llvm.py will fail as well.
-
-                       kernel-defconfig-slim, kernel-allmodconfig-slim, kernel-allyesconfig-slim:
-
-                       Same as above but only one kernel will be built. If the host architecture is in the list
-                       of targets, that architecture's requested config will be built; otherwise, the config of
-                       the first architecture in '--targets' will be built. This will result in a less optimized
-                       toolchain than the full variant above but it will result in less time spent profiling,
-                       which means less build time overall. This might be worthwhile if you want to take advantage
-                       of PGO on slower machines.
-
-                       llvm:
-
-                       The script will run the LLVM tests if they were requested via '--check-targets' then
-                       build a full LLVM toolchain with the instrumented compiler.
-
-                    4. Build a final compiler with the profile data generated from step 3 (stage 3).
-
-                    Due to the nature of this process, '--build-stage1-only' cannot be used. There will be
-                    three distinct LLVM build folders/compilers and several kernel builds done by default so
-                    ensure that you have enough space on your disk to hold this (25GB should be enough) and the
-                    time/patience to build three toolchains and kernels (will often take 5x the amount of time
-                    as '--build-stage1-only' and 4x the amount of time as the default two-stage build that the
-                    script does). When combined with '--lto', the compile time impact is about 9-10x of a one or
-                    two stage builds.
-
-                    See https://llvm.org/docs/HowToBuildWithPGO.html for more information.
-
-                         '''),
-                         nargs='+',
-                         choices=[
-                             'kernel-defconfig',
-                             'kernel-allmodconfig',
-                             'kernel-allyesconfig',
-                             'kernel-defconfig-slim',
-                             'kernel-allmodconfig-slim',
-                             'kernel-allyesconfig-slim',
-                             'llvm',
-                         ])
+        See https://llvm.org/docs/HowToBuildWithPGO.html for more information.
+    '''),
+                         nargs='+')
 parser.add_argument('--quiet-cmake',
                     help=textwrap.dedent('''\
                     By default, the script shows all output from cmake. When this option is enabled, the
@@ -433,7 +423,8 @@ else:
 # Validate and prepare Linux source if doing BOLT or PGO with kernel benchmarks
 # Check for issues early, as these technologies are time consuming, so a user
 # might step away from the build once it looks like it has started
-if args.bolt or (args.pgo and [x for x in args.pgo if 'kernel' in x]):
+lsm = None
+if (args.bolt and not args.bolt_profile) or (args.pgo and [x for x in args.pgo if 'kernel' in x]):
     lsm = LinuxSourceManager()
     if args.linux_folder:
         if not (linux_folder := Path(args.linux_folder).resolve()).exists():
@@ -539,6 +530,24 @@ if args.vendor_string:
 if args.defines:
     defines = dict(define.split('=', 1) for define in args.defines)
     common_cmake_defines.update(defines)
+# MLGO: parse and add cmake defines
+if args.mlgo:
+    for mlgo_arg in args.mlgo:
+        # Accepts inliner=path or regalloc=path
+        if '=' in mlgo_arg:
+            key, value = mlgo_arg.split('=', 1)
+            if key == 'inliner':
+                common_cmake_defines['MLGO_INLINER_MODEL'] = value
+            elif key == 'regalloc':
+                common_cmake_defines['MLGO_REGALLOC_MODEL'] = value
+            elif key == 'inliner_train':
+                common_cmake_defines['MLGO_INLINER_TRAINING'] = value
+            elif key == 'regalloc_train':
+                common_cmake_defines['MLGO_REGALLOC_TRAINING'] = value
+            # Add more MLGO knobs as needed
+        else:
+            # If just a path, assume inliner model for backward compatibility
+            common_cmake_defines['MLGO_INLINER_MODEL'] = mlgo_arg
 
 # Build bootstrap compiler if user did not request a single stage build
 if (use_bootstrap := not args.build_stage1_only):
@@ -573,108 +582,97 @@ for define in c_flag_defines:
 if args.build_type:
     common_cmake_defines['CMAKE_BUILD_TYPE'] = args.build_type
 
+# PGO: support both benchmark names and direct .profdata file
 if args.pgo:
-    if args.full_toolchain:
-        instrumented = LLVMInstrumentedBuilder()
-    else:
-        instrumented = LLVMSlimInstrumentedBuilder()
-    instrumented.build_targets = ['all' if args.full_toolchain else 'distribution']
-    instrumented.cmake_defines.update(common_cmake_defines)
-    # We run the tests on the instrumented stage if the LLVM benchmark was enabled
-    instrumented.check_targets = args.check_targets if 'llvm' in args.pgo else None
-    instrumented.folders.build = Path(build_folder, 'instrumented')
-    instrumented.folders.source = llvm_folder
-    instrumented.projects = final.projects
-    instrumented.quiet_cmake = args.quiet_cmake
-    instrumented.show_commands = args.show_build_commands
-    instrumented.targets = final.targets
-    instrumented.tools = StageTools(Path(bootstrap.folders.build, 'bin'))
+    # If any argument is a file (endswith .profdata or exists as a file), use it directly
+    profdata_file = None
+    pgo_benchmarks = []
+    for pgo_arg in args.pgo:
+        if (pgo_arg.endswith('.profdata') and Path(pgo_arg).is_file()) or (Path(pgo_arg).is_file()):
+            profdata_file = pgo_arg
+        else:
+            pgo_benchmarks.append(pgo_arg)
 
-    tc_build.utils.print_header('Building LLVM (instrumented)')
-    instrumented.configure()
-    instrumented.build()
+    if profdata_file:
+        # Use the provided profdata file directly
+        final.cmake_defines['LLVM_PROFDATA_FILE'] = str(Path(profdata_file).resolve())
+    elif pgo_benchmarks:
+        # Old behavior: run instrumented build and generate profdata
+        if args.full_toolchain:
+            instrumented = LLVMInstrumentedBuilder()
+        else:
+            instrumented = LLVMSlimInstrumentedBuilder()
+        instrumented.build_targets = ['all' if args.full_toolchain else 'distribution']
+        instrumented.cmake_defines.update(common_cmake_defines)
+        instrumented.check_targets = args.check_targets if 'llvm' in pgo_benchmarks else None
+        instrumented.folders.build = Path(build_folder, 'instrumented')
+        instrumented.folders.source = llvm_folder
+        instrumented.projects = final.projects
+        instrumented.quiet_cmake = args.quiet_cmake
+        instrumented.show_commands = args.show_build_commands
+        instrumented.targets = final.targets
+        instrumented.tools = StageTools(Path(bootstrap.folders.build, 'bin'))
 
-    tc_build.utils.print_header('Generating PGO profiles')
-    pgo_builders = []
-    if 'llvm' in args.pgo:
-        llvm_builder = def_llvm_builder_cls()
-        llvm_builder.cmake_defines.update(common_cmake_defines)
-        llvm_builder.folders.build = Path(build_folder, 'profiling')
-        llvm_builder.folders.source = llvm_folder
-        llvm_builder.projects = final.projects
-        llvm_builder.quiet_cmake = args.quiet_cmake
-        llvm_builder.show_commands = args.show_build_commands
-        llvm_builder.targets = final.targets
-        llvm_builder.tools = StageTools(Path(instrumented.folders.build, 'bin'))
-        # clang-tblgen and llvm-tblgen may not be available from the
-        # instrumented folder if the user did not pass '--full-toolchain', as
-        # only the tools included in the distribution will be available. In
-        # that case, use the bootstrap versions, which should not matter much
-        # for profiling sake.
-        if not args.full_toolchain:
-            llvm_builder.tools.clang_tblgen = Path(bootstrap.folders.build, 'bin/clang-tblgen')
-            llvm_builder.tools.llvm_tblgen = Path(bootstrap.folders.build, 'bin/llvm-tblgen')
-        pgo_builders.append(llvm_builder)
+        tc_build.utils.print_header('Building LLVM (instrumented)')
+        instrumented.configure()
+        instrumented.build()
 
-    # If the user specified both a full and slim build of the same type, remove
-    # the full build and warn them.
-    pgo_targets = [s.replace('kernel-', '') for s in args.pgo if 'kernel-' in s]
-    for pgo_target in pgo_targets:
-        if 'slim' not in pgo_target:
-            continue
-        config_target = pgo_target.split('-')[0]
-        if config_target in pgo_targets:
-            tc_build.utils.print_warning(
-                f"Both full and slim were specified for {config_target}, ignoring full...")
-            pgo_targets.remove(config_target)
+        tc_build.utils.print_header('Generating PGO profiles')
+        pgo_builders = []
+        if 'llvm' in pgo_benchmarks:
+            llvm_builder = def_llvm_builder_cls()
+            llvm_builder.cmake_defines.update(common_cmake_defines)
+            llvm_builder.folders.build = Path(build_folder, 'profiling')
+            llvm_builder.folders.source = llvm_folder
+            llvm_builder.projects = final.projects
+            llvm_builder.quiet_cmake = args.quiet_cmake
+            llvm_builder.show_commands = args.show_build_commands
+            llvm_builder.targets = final.targets
+            llvm_builder.tools = StageTools(Path(instrumented.folders.build, 'bin'))
+            if not args.full_toolchain:
+                llvm_builder.tools.clang_tblgen = Path(bootstrap.folders.build, 'bin/clang-tblgen')
+                llvm_builder.tools.llvm_tblgen = Path(bootstrap.folders.build, 'bin/llvm-tblgen')
+            pgo_builders.append(llvm_builder)
 
-    if pgo_targets:
-        kernel_builder = LLVMKernelBuilder()
-        kernel_builder.folders.build = Path(build_folder, 'linux')
-        kernel_builder.folders.source = lsm.location
-        kernel_builder.toolchain_prefix = instrumented.folders.build
-        for item in pgo_targets:
-            pgo_target = item.split('-')
+        pgo_targets = [s.replace('kernel-', '') for s in pgo_benchmarks if 'kernel-' in s]
+        for pgo_target in pgo_targets:
+            if 'slim' not in pgo_target:
+                continue
+            config_target = pgo_target.split('-')[0]
+            if config_target in pgo_targets:
+                tc_build.utils.print_warning(
+                    f"Both full and slim were specified for {config_target}, ignoring full...")
+                pgo_targets.remove(config_target)
 
-            config_target = pgo_target[0]
-            # For BOLT or "slim" PGO, we limit the number of kernels we build for
-            # each mode:
-            #
-            # When using perf, building too many kernels will generate a gigantic
-            # perf profile. perf2bolt calls 'perf script', which will load the
-            # entire profile into memory, which could cause OOM for most machines
-            # and long processing times for the ones that can handle it for little
-            # extra gain.
-            #
-            # With BOLT instrumentation, we generate one profile file for each
-            # invocation of clang (PID) to avoid profiling just the driver, so
-            # building multiple kernels will generate a few hundred gigabytes of
-            # fdata files.
-            #
-            # Just do a native build if the host target is in the list of targets
-            # or the first target if not.
-            if len(pgo_target) == 2:  # slim
-                if instrumented.host_target_is_enabled():
-                    llvm_targets = [instrumented.host_target()]
+        if pgo_targets:
+            kernel_builder = LLVMKernelBuilder()
+            kernel_builder.folders.build = Path(build_folder, 'linux')
+            kernel_builder.folders.source = lsm.location
+            kernel_builder.toolchain_prefix = instrumented.folders.build
+            for item in pgo_targets:
+                pgo_target = item.split('-')
+                config_target = pgo_target[0]
+                if len(pgo_target) == 2:
+                    if instrumented.host_target_is_enabled():
+                        llvm_targets = [instrumented.host_target()]
+                    else:
+                        llvm_targets = final.targets[0:1]
+                elif 'all' in final.targets:
+                    llvm_targets = llvm_source.default_targets()
                 else:
-                    llvm_targets = final.targets[0:1]
-            # full
-            elif 'all' in final.targets:
-                llvm_targets = llvm_source.default_targets()
-            else:
-                llvm_targets = final.targets
+                    llvm_targets = final.targets
+                kernel_builder.matrix[config_target] = llvm_targets
+            pgo_builders.append(kernel_builder)
 
-            kernel_builder.matrix[config_target] = llvm_targets
+        for pgo_builder in pgo_builders:
+            if hasattr(pgo_builder, 'configure') and callable(pgo_builder.configure):
+                tc_build.utils.print_info('Building LLVM for profiling...')
+                pgo_builder.configure()
+            pgo_builder.build()
 
-        pgo_builders.append(kernel_builder)
-
-    for pgo_builder in pgo_builders:
-        if hasattr(pgo_builder, 'configure') and callable(pgo_builder.configure):
-            tc_build.utils.print_info('Building LLVM for profiling...')
-            pgo_builder.configure()
-        pgo_builder.build()
-
-    instrumented.generate_profdata()
+        instrumented.generate_profdata()
+        final.cmake_defines['LLVM_PROFDATA_FILE'] = str(
+            Path(instrumented.folders.build, 'profdata.prof'))
 
 # Final build
 final.build_targets = args.build_targets
@@ -688,9 +686,6 @@ final.show_commands = args.show_build_commands
 
 if args.lto:
     final.cmake_defines['LLVM_ENABLE_LTO'] = args.lto.capitalize()
-if args.pgo:
-    final.cmake_defines['LLVM_PROFDATA_FILE'] = Path(instrumented.folders.build, 'profdata.prof')
-
 if use_bootstrap:
     final.tools = StageTools(Path(bootstrap.folders.build, 'bin'))
 else:
@@ -709,11 +704,16 @@ else:
         final.tools.merge_fdata = Path(final.folders.build, 'bin/merge-fdata')
         final.tools.perf2bolt = Path(final.folders.build, 'bin/perf2bolt')
 
+# BOLT: support external profile file
 if args.bolt:
     final.bolt = True
+    if args.bolt_profile and Path(args.bolt_profile).is_file():
+        final.bolt_profile = Path(args.bolt_profile).resolve()
+        final.cmake_defines['BOLT_PROFILE_FILE'] = str(final.bolt_profile)
     final.bolt_builder = LLVMKernelBuilder()
     final.bolt_builder.folders.build = Path(build_folder, 'linux')
-    final.bolt_builder.folders.source = lsm.location
+    if lsm:
+        final.bolt_builder.folders.source = lsm.location
     if final.host_target_is_enabled():
         llvm_targets = [final.host_target()]
     else:
