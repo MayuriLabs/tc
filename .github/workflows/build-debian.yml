@@ -6,7 +6,7 @@ on:
       llvm_ref:
         description: 'LLVM branch, tag, or Full SHA'
         required: true
-        default: 'llvm-r547379-release'
+        default: 'mirror-goog-llvm-r596125-release'
       vendor_string:
         description: 'Vendor string for the build'
         required: true
@@ -20,7 +20,7 @@ on:
       llvm_ref:
         type: string
         required: true
-        default: 'llvm-r547379-release'
+        default: 'mirror-goog-llvm-r596125-release'
       vendor_string:
         type: string
         required: true
@@ -66,6 +66,7 @@ jobs:
       env:
         LLVM_VENDOR_STRING: ${{ inputs.vendor_string }}
         RUN_ID: ${{ inputs.caller_run_id || github.run_id }}
+        LLVM_REF: ${{ inputs.llvm_ref }}
     - name: Build binutils
       run: bash ci.sh binutils
     - name: Compress artifacts
@@ -77,3 +78,4 @@ jobs:
       env:
         LLVM_VENDOR_STRING: ${{ inputs.vendor_string }}
         RUN_ID: ${{ inputs.caller_run_id || github.run_id }}
+        LLVM_REF: ${{ inputs.llvm_ref }}

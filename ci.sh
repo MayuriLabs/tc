@@ -4,14 +4,22 @@ base=$(dirname "$(readlink -f "$0")")
 install=$base/install
 src=$base/src
 export PATH="$base/.clang/bin:$PATH"
+# Detect Python version to use
+if command -v python3.11 >/dev/null 2>&1; then
+    PYTHON=python3.11
+else
+    PYTHON=python3
+fi
+
 # Helper to detect TensorFlow installation path
 function detect_tensorflow() {
-    if python3.11 -c "import tensorflow" >/dev/null 2>&1; then
-        TENSORFLOW_INSTALL=$(python3.11 -c "import tensorflow; print(tensorflow.__path__[0])")
+    if $PYTHON -c "import tensorflow" >/dev/null 2>&1; then
+        TENSORFLOW_INSTALL=$($PYTHON -c "import tensorflow; print(tensorflow.__path__[0])")
         export TENSORFLOW_INSTALL
     else
         # Fallback to standard path if not installed yet (for do_deps to fill)
-        TENSORFLOW_INSTALL=/usr/local/lib/python3.11/dist-packages/tensorflow
+        py_ver=$($PYTHON -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "3.11")
+        TENSORFLOW_INSTALL=/usr/local/lib/python${py_ver}/dist-packages/tensorflow
         export TENSORFLOW_INSTALL
     fi
 }
@@ -50,7 +58,7 @@ function do_all() {
 function do_binutils() {
     local targets=("aarch64" "arm" "x86_64")
 
-    python3.11 "$base"/build-binutils.py \
+    $PYTHON "$base"/build-binutils.py \
         --install-folder "$install" \
         --show-build-commands \
         --targets "${targets[@]}"
@@ -101,9 +109,27 @@ function do_deps() {
 
         # Ensure python3.11 is available via deadsnakes PPA if needed
         if ! apt-cache show python3.11 >/dev/null 2>&1; then
-            apt install -y --no-install-recommends software-properties-common
-            add-apt-repository -y ppa:deadsnakes/ppa
-            apt update -y
+            if apt-cache show software-properties-common >/dev/null 2>&1; then
+                apt install -y --no-install-recommends software-properties-common
+                add-apt-repository -y ppa:deadsnakes/ppa
+                apt update -y
+            fi
+        fi
+
+        # Build list of packages to install
+        py_pkgs=()
+        if apt-cache show python3.11 >/dev/null 2>&1; then
+            PYTHON=python3.11
+            py_pkgs+=(python3.11 python3.11-dev python3.11-venv)
+            if apt-cache show python3.11-distutils >/dev/null 2>&1; then
+                py_pkgs+=(python3.11-distutils)
+            fi
+        else
+            PYTHON=python3
+            py_pkgs+=(python3 python3-dev python3-venv)
+            if apt-cache show python3-distutils >/dev/null 2>&1; then
+                py_pkgs+=(python3-distutils)
+            fi
         fi
 
         apt install -y --no-install-recommends \
@@ -131,10 +157,7 @@ function do_deps() {
             ninja-build \
             patch \
             patchelf \
-            python3.11 \
-            python3.11-dev \
-            python3.11-distutils \
-            python3.11-venv \
+            "${py_pkgs[@]}" \
             python3-pip \
             texinfo \
             wget \
@@ -143,13 +166,13 @@ function do_deps() {
     fi
 
     # Ensure pip is available for python3.11
-    if ! python3.11 -m pip --version >/dev/null 2>&1; then
-        python3.11 -m ensurepip --upgrade || {
-            curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
+    if ! $PYTHON -m pip --version >/dev/null 2>&1; then
+        $PYTHON -m ensurepip --upgrade || {
+            curl -sS https://bootstrap.pypa.io/get-pip.py | $PYTHON
         }
     fi
 
-    python3.11 -m pip install --break-system-packages -r "$base"/requirements.txt
+    $PYTHON -m pip install --break-system-packages -r "$base"/requirements.txt
 
     # Refresh TensorFlow path after installation
     detect_tensorflow
@@ -171,7 +194,7 @@ function do_kernel() {
             "$linux"
     fi
 
-    cat <<EOF | env PYTHONPATH="$base"/tc_build python3.11 -
+    cat <<EOF | env PYTHONPATH="$base"/tc_build $PYTHON -
 from pathlib import Path
 
 from kernel import LLVMKernelBuilder
@@ -191,6 +214,7 @@ function do_llvm() {
     [[ -n ${GITHUB_ACTIONS:-} ]] && extra_args+=(--no-ccache)
     TomTal=$(nproc)
     TomTal=$((TomTal + 1))
+    llvm_version=$(echo "${LLVM_REF}" | grep -oP 'r\d+')
 
     local targets=("AArch64" "ARM" "X86")
 
@@ -210,9 +234,9 @@ function do_llvm() {
     done
     cd "$base"
 
-    python3.11 "$base"/build-llvm.py \
+    $PYTHON "$base"/build-llvm.py \
         --install-folder "$install" \
-        --vendor-string "$LLVM_VENDOR_STRING ($RUN_ID, +pgo, +bolt, +lto, +mlgo, based on r547379)" \
+        --vendor-string "$LLVM_VENDOR_STRING ($RUN_ID, +pgo, +bolt, +lto, +mlgo, based on $llvm_version)" \
         --targets "${targets[@]}" \
         --defines "LLVM_PARALLEL_COMPILE_JOBS=$TomTal LLVM_PARALLEL_LINK_JOBS=$TomTal CMAKE_C_FLAGS='-g0 -O3' CMAKE_CXX_FLAGS='-g0 -O3' LLVM_USE_LINKER=lld LLVM_ENABLE_LLD=ON" \
         --projects clang compiler-rt lld polly openmp \
@@ -220,7 +244,7 @@ function do_llvm() {
         --quiet-cmake \
         --llvm-folder "$base"/llvm-project \
         --lto thin \
-        --pgo "$base"/profiles/r547379.profdata \
+        --pgo "$base"/profiles/"$llvm_version".profdata \
         --bolt \
         --bolt-profile "$base"/profiles/clang.fdata \
         "${extra_args[@]}"
@@ -279,6 +303,7 @@ function do_release() {
     # Upload to GitHub Releases using GitHub CLI
     # Find tarball files
     file_name=$(find "$base"/dist/ -maxdepth 1 -name "${LLVM_VENDOR_STRING}-clang_*.tar.xz" -print -quit)
+    llvm_version=$(echo "${LLVM_REF}" | grep -oP 'r\d+')
 
     if [[ -z $file_name ]]; then
         echo "No file found to upload."
@@ -291,8 +316,8 @@ function do_release() {
     TAG="$clang_version-$RUN_ID"
     ASSET="$file_name"
     REPO="$GITHUB_REPOSITORY"
-    TITLE="$LLVM_VENDOR_STRING ($RUN_ID, +pgo, +bolt, +lto, +mlgo, based on r547379) Clang $clang_version"
-    NOTES="$LLVM_VENDOR_STRING ($RUN_ID, +pgo, +bolt, +lto, +mlgo, based on r547379) Clang $clang_version"
+    TITLE="$LLVM_VENDOR_STRING ($RUN_ID, +pgo, +bolt, +lto, +mlgo, based on $llvm_version) Clang $clang_version"
+    NOTES="$LLVM_VENDOR_STRING ($RUN_ID, +pgo, +bolt, +lto, +mlgo, based on $llvm_version) Clang $clang_version"
 
     # Check if release exists
     if gh release view "$TAG" --repo "$REPO" &>/dev/null; then
