@@ -6,7 +6,7 @@ on:
       llvm_ref:
         description: 'LLVM branch, tag, or Full SHA'
         required: true
-        default: 'mirror-goog-llvm-r596125-release'
+        default: 'mirror-google-llvm-r614150-release'
       vendor_string:
         description: 'Vendor string for the build'
         required: true
