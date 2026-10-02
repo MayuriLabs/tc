@@ -291,11 +291,18 @@ class LLVMBuilder(Builder):
 
         # https://github.com/llvm/llvm-project/commit/b593110d89aea76b8b10152b24ece154bff3e4b5
         llvm_enable_projects = self.projects.copy()
+        llvm_enable_runtimes = []
         if self.llvm_major_version >= LLVM_VER_FOR_RUNTIMES and self.project_is_enabled(
                 'compiler-rt'):
             llvm_enable_projects.remove('compiler-rt')
-            self.cmake_defines['LLVM_ENABLE_RUNTIMES'] = 'compiler-rt'
+            llvm_enable_runtimes.append('compiler-rt')
+        if self.llvm_major_version >= 23 and self.project_is_enabled(
+                'openmp'):
+            llvm_enable_projects.remove('openmp')
+            llvm_enable_runtimes.append('openmp')
         self.cmake_defines['LLVM_ENABLE_PROJECTS'] = ';'.join(llvm_enable_projects)
+        if len(llvm_enable_runtimes) > 0:
+            self.cmake_defines['LLVM_ENABLE_RUNTIMES'] = ';'.join(llvm_enable_runtimes)
         # Remove system dependency on terminfo to keep the dynamic library
         # dependencies slim. This can be done unconditionally when the option
         # exists, as it does not impact clang's ability to show colors for
