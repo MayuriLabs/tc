@@ -15,23 +15,6 @@ on:
         description: 'Debian codename for the build'
         required: true
         default: 'bookworm'
-  workflow_call:
-    inputs:
-      llvm_ref:
-        type: string
-        required: true
-        default: 'mirror-goog-llvm-r596125-release'
-      vendor_string:
-        type: string
-        required: true
-        default: 'Mayuri'
-      debian_codename:
-        type: string
-        required: true
-        default: 'bookworm'
-      caller_run_id:
-        type: string
-        required: false
 
 permissions:
   contents: write
