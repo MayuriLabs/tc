@@ -14,7 +14,7 @@ on:
       debian_codename:
         description: 'Debian codename for the build'
         required: true
-        default: 'bookworm'
+        default: 'trixie'
 
 permissions:
   contents: write

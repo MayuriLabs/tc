@@ -121,15 +121,9 @@ function do_deps() {
         if apt-cache show python3.11 >/dev/null 2>&1; then
             PYTHON=python3.11
             py_pkgs+=(python3.11 python3.11-dev python3.11-venv)
-            if apt-cache show python3.11-distutils >/dev/null 2>&1; then
-                py_pkgs+=(python3.11-distutils)
-            fi
         else
             PYTHON=python3
             py_pkgs+=(python3 python3-dev python3-venv)
-            if apt-cache show python3-distutils >/dev/null 2>&1; then
-                py_pkgs+=(python3-distutils)
-            fi
         fi
 
         apt install -y --no-install-recommends \
@@ -159,6 +153,7 @@ function do_deps() {
             patchelf \
             "${py_pkgs[@]}" \
             python3-pip \
+            python3-setuptools \
             texinfo \
             wget \
             xz-utils \
